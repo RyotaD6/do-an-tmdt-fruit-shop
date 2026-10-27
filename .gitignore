@@ -1,0 +1,14 @@
+# Bỏ qua môi trường ảo Python
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Bỏ qua thư viện và file build của React
+node_modules/
+dist/
+.env
+
+# Bỏ qua file tạm hệ thống
+.vscode/
+.DS_Store
