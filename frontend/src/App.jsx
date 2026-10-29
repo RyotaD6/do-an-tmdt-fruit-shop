@@ -716,6 +716,12 @@ export default function App() {
     street: 'Số 18 Đền Lừ 2'
   });
   const [selectedVoucherCode, setSelectedVoucherCode] = useState('FRESHMART50K');
+  const [selectedShippingVoucherCode, setSelectedShippingVoucherCode] = useState('FREESHIPGHN');
+  const [cartRequestKey, setCartRequestKey] = useState(() =>
+    'REQ-' + Math.random().toString(36).substring(2, 10).toUpperCase() + '-' + Date.now().toString(36).toUpperCase()
+  );
+  const [reservedPendingOrderCode, setReservedPendingOrderCode] = useState(null);
+  const [voucherWarning, setVoucherWarning] = useState(null);
   const [paymentMethod, setPaymentMethod] = useState('vnpay'); // 'vnpay' | 'momo' | 'wallet' | 'cod'
   const [showVnpayModal, setShowVnpayModal] = useState(false);
   const [vnpayStep, setVnpayStep] = useState(1); // 1: Nhập thẻ NCB test, 2: Nhập OTP 123456
@@ -817,71 +823,90 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Đồng bộ dữ liệu từ Backend Python Django + SQL Server (nếu đang chạy ở cổng 8000)
-  useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/products/')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (Array.isArray(data) && data.length > 0) {
-          const mapped = data.map((p, idx) => ({
-            id: `db-${p.id}`,
-            name: p.name,
-            categoryId: p.category_name?.includes('Nhập khẩu')
-              ? 'nhap-khau'
-              : p.category_name?.includes('Giỏ quà')
-              ? 'gio-qua'
-              : p.category_name?.includes('Hữu cơ')
-              ? 'huu-co'
-              : 'noi-dia',
-            shopId: `shop-${(idx % 3) + 1}`,
-            brand: p.brand || 'VietGAP',
-            origin: p.origin || 'Việt Nam',
-            artType: p.art_type || 'durian',
-            price: Number(p.variants?.[0]?.price || 149000),
-            originalPrice: Number(p.variants?.[0]?.price || 149000) + 45000,
-            isFlashSale: Boolean(p.is_flash_sale),
-            flashSalePrice: Number(p.variants?.[0]?.flash_sale_price || p.variants?.[0]?.price || 149000),
-            stock: Number(p.variants?.[0]?.stock || 50),
-            sold: Number(p.sold_count || 120),
-            rating: 4.9,
-            weightGram: Number(p.variants?.[0]?.weight_gram || 500),
-            dimensions: '20x15x10 cm',
-            nutrition: p.nutrition_tags || 'Giàu Vitamin và khoáng chất tự nhiên',
-            shortDesc: p.ai_review_summary || 'Trái cây tươi thu hoạch trong ngày, chuẩn VietGAP.',
-            detailDesc: p.ai_review_summary || 'Trái cây tươi ngon cam kết 1 đổi 1 nếu dập hỏng.',
-            variants:
-              Array.isArray(p.variants) && p.variants.length > 0
-                ? p.variants.map((v) => ({
-                    id: `dbv-${v.id}`,
-                    label: v.label,
-                    ripeness: v.ripeness || 'Chín ăn ngay',
-                    price: Number(v.price),
-                    originalPrice: Number(v.price) + 40000,
-                    stock: Number(v.stock || 30),
-                    weightGram: Number(v.weight_gram || 500)
-                  }))
-                : [
-                    {
-                      id: `dbv-default-${p.id}`,
-                      label: 'Hộp 500g',
-                      ripeness: 'Chín ăn ngay',
-                      price: 149000,
-                      originalPrice: 190000,
-                      stock: 30,
-                      weightGram: 500
-                    }
-                  ]
-          }));
-          setProducts((prev) => {
-            const existingNames = new Set(mapped.map((m) => m.name));
-            return [...mapped, ...prev.filter((item) => !existingNames.has(item.name))];
+  // State lưu kết quả kiểm thử Điều kiện 1 (Không bán vượt kho) ngay trên giao diện Web
+  const [stockCheckResult, setStockCheckResult] = useState(null);
+  const [isTestingConcurrency, setIsTestingConcurrency] = useState(false);
+
+  // Đồng bộ 100% Tồn kho, Lượt bán và Đơn hàng từ SQL Server mỗi khi tải/F5 trang web
+  const syncStockFromBackend = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/products/');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data) || data.length === 0) return;
+
+      setProducts((prev) =>
+        prev.map((item, idx) => {
+          // Khớp chính xác sản phẩm trong SQL Server theo tên hoặc art_type hoặc vị trí
+          const matchedDbProduct =
+            data.find((dbP) => dbP.name.toLowerCase().trim() === item.name.toLowerCase().trim()) ||
+            data.find((dbP) => dbP.art_type === item.artType && !prev.some((other, oIdx) => oIdx < idx && other.artType === item.artType)) ||
+            data[idx];
+
+          if (!matchedDbProduct || !Array.isArray(matchedDbProduct.variants) || matchedDbProduct.variants.length === 0) {
+            return item;
+          }
+
+          const updatedVariants = item.variants.map((v, vIdx) => {
+            const dbVar =
+              matchedDbProduct.variants.find((dv) => dv.label.toLowerCase().trim() === v.label.toLowerCase().trim()) ||
+              matchedDbProduct.variants[vIdx] ||
+              matchedDbProduct.variants[0];
+            if (!dbVar) return v;
+            return {
+              ...v,
+              sqlVariantId: dbVar.id,
+              stock: Number(dbVar.stock),
+              price: Number(dbVar.price),
+              weightGram: Number(dbVar.weight_gram || v.weightGram || 500)
+            };
           });
+
+          // Tổng tồn kho hiển thị của sản phẩm = tổng tồn kho các biến thể trong SQL Server
+          const totalDbStock = updatedVariants.reduce((sum, uv) => sum + Number(uv.stock || 0), 0);
+
+          return {
+            ...item,
+            sqlProductId: matchedDbProduct.id,
+            stock: updatedVariants[0]?.stock ?? totalDbStock,
+            totalStock: totalDbStock,
+            sold: Number(matchedDbProduct.sold_count ?? item.sold),
+            variants: updatedVariants
+          };
+        })
+      );
+
+      // Tải danh sách Đơn hàng đã lưu trong SQL Server để khi F5 không bị mất đơn vừa đặt
+      const ordersRes = await fetch('http://127.0.0.1:8000/api/orders/list/');
+      if (ordersRes.ok) {
+        const ordersData = await ordersRes.json();
+        if (Array.isArray(ordersData.orders) && ordersData.orders.length > 0) {
+          setOrders(ordersData.orders);
         }
-      })
-      .catch(() => {
-        // Khi chạy trên Canvas hoặc chưa bật server Django thì giữ nguyên bộ dữ liệu mẫu 8 sản phẩm
-      });
+      }
+    } catch {
+      // Nếu chưa bật Backend Django thì giữ state hiện tại
+    }
+  };
+
+  useEffect(() => {
+    syncStockFromBackend();
   }, []);
+
+  // ĐIỀU KIỆN 2: Giỏ hàng thay đổi (thêm/bớt món, đổi số lượng) -> Tự động sinh RequestKey (GUID) mới
+  const cartSignature = useMemo(
+    () => cart.map((c) => `${c.productId}:${c.variantId}:${c.quantity}`).join('|'),
+    [cart]
+  );
+  useEffect(() => {
+    const newGuid =
+      'REQ-' +
+      Math.random().toString(36).substring(2, 10).toUpperCase() +
+      '-' +
+      Date.now().toString(36).toUpperCase();
+    setCartRequestKey(newGuid);
+    setReservedPendingOrderCode(null);
+  }, [cartSignature]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1008,8 +1033,8 @@ export default function App() {
     const extraWeightFee = totalWeightGram > 1000 ? Math.ceil((totalWeightGram - 1000) / 1000) * 6000 : 0;
     const shippingFee = detailedItems.length > 0 ? baseGhn + extraWeightFee : 0;
 
-    // Tính giảm giá Voucher (Như trong video: chỉ áp dụng 1 voucher tốt nhất tại 1 thời điểm)
-    const voucher = vouchers.find((v) => v.code === selectedVoucherCode);
+    // ĐIỀU KIỆN 4: Tối đa 1 mã giảm giá hàng hóa + 1 mã vận chuyển; kiểm tra lại ở mỗi bước
+    const voucher = vouchers.find((v) => v.code === selectedVoucherCode && v.code !== 'FREESHIPGHN');
     let discountAmount = 0;
     if (voucher && subtotal >= voucher.minOrder) {
       if (voucher.discountType === 'fixed') {
@@ -1022,12 +1047,175 @@ export default function App() {
       }
     }
 
-    const finalTotal = Math.max(0, subtotal + shippingFee - discountAmount);
-    return { detailedItems, subtotal, totalWeightGram, shippingFee, discountAmount, finalTotal, voucher };
-  }, [cart, products, shippingAddress, selectedVoucherCode, vouchers]);
+    const shipVoucher = vouchers.find((v) => v.code === selectedShippingVoucherCode && v.code === 'FREESHIPGHN');
+    let shippingDiscountAmount = 0;
+    if (shipVoucher && subtotal >= shipVoucher.minOrder && shippingFee > 0) {
+      shippingDiscountAmount = Math.min(shippingFee, shipVoucher.discountValue);
+    }
 
-  // Xử lý đặt hàng & cổng VNPay / MoMo / Ví nội bộ
-  const handleProceedCheckout = () => {
+    const totalDiscount = discountAmount + shippingDiscountAmount;
+    const finalTotal = Math.max(0, subtotal + shippingFee - totalDiscount);
+    return {
+      detailedItems,
+      subtotal,
+      totalWeightGram,
+      shippingFee,
+      discountAmount,
+      shippingDiscountAmount,
+      totalDiscount,
+      finalTotal,
+      voucher,
+      shipVoucher
+    };
+  }, [cart, products, shippingAddress, selectedVoucherCode, selectedShippingVoucherCode, vouchers]);
+
+  // ĐIỀU KIỆN 4: Tự động kiểm tra lại Voucher mỗi khi giỏ hàng thay đổi; nếu không còn đủ điều kiện thì gỡ mã kèm thông báo
+  useEffect(() => {
+    if (cartSummary.detailedItems.length === 0) return;
+    const warnings = [];
+    if (selectedVoucherCode) {
+      const vc = vouchers.find((v) => v.code === selectedVoucherCode);
+      if (vc && cartSummary.subtotal < vc.minOrder) {
+        setSelectedVoucherCode('');
+        warnings.push(
+          `Mã giảm giá ${vc.code} đã tự động được gỡ vì tổng tiền hàng (${formatVND(cartSummary.subtotal)}) thấp hơn mức tối thiểu ${formatVND(vc.minOrder)}.`
+        );
+      }
+    }
+    if (selectedShippingVoucherCode) {
+      const svc = vouchers.find((v) => v.code === selectedShippingVoucherCode);
+      if (svc && cartSummary.subtotal < svc.minOrder) {
+        setSelectedShippingVoucherCode('');
+        warnings.push(
+          `Mã vận chuyển ${svc.code} đã tự động được gỡ vì đơn hàng chưa đạt tối thiểu ${formatVND(svc.minOrder)}.`
+        );
+      }
+    }
+    if (warnings.length > 0) {
+      setVoucherWarning(warnings.join(' '));
+      showNotice(`⚠️ ${warnings[0]}`, 'warning');
+    }
+  }, [cartSummary.subtotal, cartSummary.detailedItems.length, selectedVoucherCode, selectedShippingVoucherCode, vouchers]);
+
+  // ============================================================================
+  // TÍCH HỢP CẢ 4 ĐIỀU KIỆN (1.DOCX): KHO SERIALIZABLE + CHỐNG TRÙNG + GIỮ CHỖ 30P + GIÁ SERVER
+  // ============================================================================
+  const executeCondition1StockTransaction = async (
+    itemsToBuy,
+    callerLabel = 'Đặt hàng',
+    reserveOnly = false
+  ) => {
+    const sortedItems = [...itemsToBuy].sort((a, b) =>
+      `${a.productId}-${a.variantId}`.localeCompare(`${b.productId}-${b.variantId}`)
+    );
+
+    try {
+      const payload = {
+        request_key: cartRequestKey,
+        reserve_only: reserveOnly,
+        items: sortedItems.map((i) => ({
+          variant_id: i.variant.sqlVariantId || 1,
+          quantity: i.quantity,
+          client_price: i.unitPrice
+        })),
+        discount_voucher_code: selectedVoucherCode || '',
+        shipping_voucher_code: selectedShippingVoucherCode || '',
+        shipping_address: `${shippingAddress.street}, ${shippingAddress.ward}, ${shippingAddress.district}, ${shippingAddress.city}`,
+        payment_method: paymentMethod
+      };
+
+      const res = await fetch('http://127.0.0.1:8000/api/orders/checkout/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setStockCheckResult({
+          type: 'rollback',
+          title: 'GIAO DỊCH BỊ CHẶN & ROLLBACK TOÀN BỘ',
+          caller: callerLabel,
+          errorDetail: data.error || 'Không đủ tồn kho, đã rollback toàn bộ đơn hàng!'
+        });
+        showNotice(`⚠️ ${data.error}`, 'warning');
+        await syncStockFromBackend();
+        return { ok: false, error: data.error };
+      }
+
+      if (Array.isArray(data.voucher_warnings) && data.voucher_warnings.length > 0) {
+        setVoucherWarning(data.voucher_warnings.join(' '));
+      }
+
+      await syncStockFromBackend();
+      return {
+        ok: true,
+        orderCode: data.order_code,
+        isDuplicate: Boolean(data.is_duplicate),
+        serverTotal: data.total_amount,
+        serverStatus: data.status_display || data.status,
+        message: data.message
+      };
+    } catch {
+      for (const item of sortedItems) {
+        const latestProd = products.find((p) => p.id === item.productId);
+        const latestVar = latestProd?.variants.find((v) => v.id === item.variantId) || item.variant;
+        const currentStock = Number(latestVar?.stock ?? 0);
+        if (item.quantity > currentStock) {
+          const msg = `Sản phẩm "${item.product.name} (${item.variant.label})" không đủ tồn kho! Khách đặt ${item.quantity} nhưng kho chỉ còn ${currentStock}. Toàn bộ đơn đã được Rollback.`;
+          setStockCheckResult({
+            type: 'rollback',
+            title: 'GIAO DỊCH BỊ CHẶN & ROLLBACK TOÀN BỘ',
+            caller: callerLabel,
+            errorDetail: msg
+          });
+          showNotice(`⚠️ ${msg}`, 'warning');
+          return { ok: false, error: msg };
+        }
+      }
+
+      const existing = orders.find((o) => o.requestKey === cartRequestKey);
+      if (existing) {
+        return {
+          ok: true,
+          orderCode: existing.id,
+          isDuplicate: true,
+          serverTotal: existing.totalAmount,
+          message: `Phát hiện RequestKey trùng (${cartRequestKey}) -> Trả về đơn cũ #${existing.id}, không trừ kho lần 2!`
+        };
+      }
+
+      setProducts((prev) =>
+        prev.map((p) => {
+          const boughtInProd = sortedItems.filter((i) => i.productId === p.id);
+          if (boughtInProd.length === 0) return p;
+          const totalBoughtQty = boughtInProd.reduce((s, i) => s + i.quantity, 0);
+          const nextVariants = p.variants.map((v) => {
+            const matchItem = boughtInProd.find((i) => i.variantId === v.id);
+            if (!matchItem) return v;
+            return { ...v, stock: Math.max(0, v.stock - matchItem.quantity) };
+          });
+          return {
+            ...p,
+            stock: nextVariants[0]?.stock ?? p.stock,
+            sold: p.sold + totalBoughtQty,
+            variants: nextVariants
+          };
+        })
+      );
+
+      const genCode = `FM-${Math.floor(100000 + Math.random() * 900000)}`;
+      return {
+        ok: true,
+        orderCode: genCode,
+        isDuplicate: false,
+        serverTotal: cartSummary.finalTotal
+      };
+    }
+  };
+
+  // Xử lý bấm nút "Tiến Hành Thanh Toán"
+  const handleProceedCheckout = async () => {
     if (cartSummary.detailedItems.length === 0) {
       showNotice('Giỏ hàng đang trống, hãy chọn trái cây trước nhé!', 'warning');
       return;
@@ -1036,82 +1224,182 @@ export default function App() {
       showNotice('Vui lòng nhập địa chỉ giao hàng để tính phí GHN!', 'warning');
       return;
     }
+
     if (paymentMethod === 'wallet' && buyerWallet < cartSummary.finalTotal) {
       showNotice('Số dư Ví FreshMart không đủ, vui lòng chọn VNPay/MoMo hoặc COD!', 'warning');
       return;
     }
+
+    // ĐIỀU KIỆN 3: Nếu chọn thanh toán Online (VNPay / MoMo), đặt đơn là GIỮ CHỖ NGAY (trừ kho, Voucher sang Reserved trong 30 phút) trước khi mở cổng thanh toán!
     if (paymentMethod === 'vnpay' || paymentMethod === 'momo') {
+      const reserveRes = await executeCondition1StockTransaction(
+        cartSummary.detailedItems,
+        'Giữ chỗ thanh toán Online 30 phút',
+        true
+      );
+      if (!reserveRes.ok) return;
+
+      setReservedPendingOrderCode(reserveRes.orderCode);
+      if (reserveRes.isDuplicate) {
+        showNotice(`ℹ️ Đã nhận diện đơn giữ chỗ #${reserveRes.orderCode} (Chống tạo trùng đơn). Đang mở lại cổng thanh toán!`);
+      } else {
+        showNotice(`🔒 Đã giữ chỗ kho & Voucher (Reserved 30 phút) cho đơn #${reserveRes.orderCode}!`);
+      }
       setVnpayStep(1);
       setShowVnpayModal(true);
       return;
     }
-    finalizeOrder(paymentMethod === 'wallet' ? 'Ví Nội Bộ FreshMart' : 'Thanh toán khi nhận hàng (COD)');
+
+    await finalizeOrder(paymentMethod === 'wallet' ? 'Ví Nội Bộ FreshMart' : 'Thanh toán khi nhận hàng (COD)');
   };
 
-  const finalizeOrder = (methodLabel) => {
-    const newOrderId = `DH-${Math.floor(10000 + Math.random() * 90000)}`;
-    const newOrder = {
-      id: newOrderId,
-      createdAt: '23/10/2026 09:15',
-      buyerName: 'Khách Hàng Demo',
-      address: `${shippingAddress.street}, ${shippingAddress.ward}, ${shippingAddress.district}, ${shippingAddress.city}`,
-      paymentMethod: methodLabel,
-      status: methodLabel.includes('COD') ? 'Chờ xác nhận' : 'Đã thanh toán',
-      items: cartSummary.detailedItems.map((i) => ({
-        productId: i.product.id,
-        name: i.product.name,
-        variantLabel: i.variant.label,
-        price: i.unitPrice,
-        quantity: i.quantity,
-        shopId: i.product.shopId,
-        artType: i.product.artType
-      })),
-      shippingFee: cartSummary.shippingFee,
-      discountAmount: cartSummary.discountAmount,
-      totalAmount: cartSummary.finalTotal,
-      returnReason: '',
-      returnDetail: '',
-      reviewed: false
-    };
-
-    if (paymentMethod === 'wallet') {
-      setBuyerWallet((prev) => prev - cartSummary.finalTotal);
-      setWalletHistory((prev) => [
-        {
-          id: `wh-${Date.now()}`,
-          type: `Thanh toán đơn hàng #${newOrderId}`,
-          amount: -cartSummary.finalTotal,
-          date: '23/10/2026 09:15',
-          status: 'Thành công'
-        },
-        ...prev
-      ]);
+  // Hoàn tất thanh toán (hoặc xác nhận OTP VNPay)
+  const finalizeOrder = async (methodLabel) => {
+    if (reservedPendingOrderCode) {
+      try {
+        const res = await fetch('http://127.0.0.1:8000/api/orders/confirm-payment/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order_code: reservedPendingOrderCode })
+        });
+        if (res.ok) {
+          await syncStockFromBackend();
+          setCart([]);
+          setReservedPendingOrderCode(null);
+          setShowVnpayModal(false);
+          setActiveView('orders');
+          showNotice(`🎉 Thanh toán thành công đơn #${reservedPendingOrderCode}! Voucher đã chuyển sang Used.`);
+          return;
+        }
+      } catch {
+        // Fallback local
+      }
     }
 
-    setOrders((prev) => [newOrder, ...prev]);
+    const txResult = await executeCondition1StockTransaction(
+      cartSummary.detailedItems,
+      `Thanh toán qua ${methodLabel}`,
+      false
+    );
+
+    if (!txResult.ok) {
+      setShowVnpayModal(false);
+      return;
+    }
+
+    const newOrderId = txResult.orderCode || `FM-${Math.floor(100000 + Math.random() * 900000)}`;
+    if (!txResult.isDuplicate) {
+      const newOrder = {
+        id: newOrderId,
+        requestKey: cartRequestKey,
+        createdAt: '30/10/2026 00:20',
+        buyerName: 'Khách Hàng Demo',
+        address: `${shippingAddress.street}, ${shippingAddress.ward}, ${shippingAddress.district}, ${shippingAddress.city}`,
+        paymentMethod: methodLabel,
+        status: methodLabel.includes('COD') ? 'Chờ xác nhận' : 'Đã thanh toán',
+        voucherStatus: (selectedVoucherCode || selectedShippingVoucherCode) ? 'Used' : 'None',
+        items: cartSummary.detailedItems.map((i) => ({
+          productId: i.product.id,
+          name: i.product.name,
+          variantLabel: i.variant.label,
+          price: i.unitPrice,
+          quantity: i.quantity,
+          shopId: i.product.shopId,
+          artType: i.product.artType
+        })),
+        shippingFee: cartSummary.shippingFee,
+        discountAmount: cartSummary.totalDiscount,
+        totalAmount: txResult.serverTotal ?? cartSummary.finalTotal,
+        returnReason: '',
+        returnDetail: '',
+        reviewed: false
+      };
+
+      if (paymentMethod === 'wallet') {
+        setBuyerWallet((prev) => prev - cartSummary.finalTotal);
+        setWalletHistory((prev) => [
+          {
+            id: `wh-${Date.now()}`,
+            type: `Thanh toán đơn hàng #${newOrderId}`,
+            amount: -cartSummary.finalTotal,
+            date: '30/10/2026 00:20',
+            status: 'Thành công'
+          },
+          ...prev
+        ]);
+      }
+
+      setOrders((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrderId)]);
+    }
+
+    await syncStockFromBackend();
     setCart([]);
+    setReservedPendingOrderCode(null);
     setShowVnpayModal(false);
     setActiveView('orders');
-    showNotice(`Đặt hàng thành công mã #${newOrderId} qua ${methodLabel}!`);
+    showNotice(
+      txResult.isDuplicate
+        ? `ℹ️ Chống đặt trùng: Đã trả lại đơn hàng cũ #${newOrderId} (không trừ kho lần 2)!`
+        : `🎉 Đặt hàng thành công mã #${newOrderId} qua ${methodLabel}!`
+    );
   };
 
-  // Hủy đơn hàng -> Tự động hoàn tiền vào Ví (như phút 09:30 trong video)
-  const handleCancelOrder = (order) => {
+  // ĐIỀU KIỆN 3: Khi khách đóng ngang cổng VNPay (Bỏ dở thanh toán Online) -> Đơn nằm ở trạng thái "Chờ thanh toán (Giữ chỗ 30p)"
+  const handleAbandonVnpayModal = async () => {
+    setShowVnpayModal(false);
+    await syncStockFromBackend();
+    setCart([]);
+    setActiveView('orders');
+    showNotice(
+      `⏳ Bạn đã đóng cổng thanh toán. Đơn #${reservedPendingOrderCode} đang GIỮ CHỖ KHO & VOUCHER (Reserved) trong 30 phút!`,
+      'warning'
+    );
+  };
+
+  // ĐIỀU KIỆN 3: Hủy đơn hàng -> Máy trạng thái chuyển sang Đã hủy, CỘNG LẠI KHO & trả Voucher về Released!
+  const handleCancelOrder = async (order) => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/orders/cancel/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_code: order.id })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showNotice(`⚠️ Máy trạng thái từ chối: ${data.error}`, 'warning');
+        return;
+      }
+      await syncStockFromBackend();
+      setBuyerWallet((prev) => prev + order.totalAmount);
+      showNotice(`✅ ${data.message}`);
+      return;
+    } catch {
+      // Fallback local
+    }
+
     setOrders((prev) =>
-      prev.map((o) => (o.id === order.id ? { ...o, status: 'Đã hủy' } : o))
+      prev.map((o) =>
+        o.id === order.id ? { ...o, status: 'Đã hủy', voucherStatus: 'Released' } : o
+      )
     );
     setBuyerWallet((prev) => prev + order.totalAmount);
-    setWalletHistory((prev) => [
-      {
-        id: `wh-${Date.now()}`,
-        type: `Hoàn tiền tự động do hủy đơn #${order.id}`,
-        amount: +order.totalAmount,
-        date: '23/10/2026 09:18',
-        status: 'Đã hoàn vào Ví'
-      },
-      ...prev
-    ]);
-    showNotice(`Đã hủy đơn #${order.id} và hoàn ${formatVND(order.totalAmount)} về Ví của bạn!`);
+    showNotice(`Đã hủy đơn #${order.id}, cộng lại tồn kho và trả Voucher về Released!`);
+  };
+
+  // ĐIỀU KIỆN 3: Quét các đơn giữ chỗ quá hạn 30 phút chưa thanh toán -> Tự động hoàn kho & trả Voucher về Released
+  const handleSweepExpiredOrders = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/orders/release-expired/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force_all_pending_online: true })
+      });
+      const data = await res.json();
+      await syncStockFromBackend();
+      showNotice(`🔄 ${data.message}`);
+    } catch {
+      showNotice('Vui lòng bật Backend Django để chạy dịch vụ quét đơn quá hạn 30 phút!', 'warning');
+    }
   };
 
   // Khách hàng xác nhận đã nhận hàng -> Cộng tiền vào Ví người bán
@@ -1409,29 +1697,30 @@ export default function App() {
     showNotice('Đã cập nhật Banner mới lên Trang chủ thành công!');
   };
 
-  // Admin cập nhật trạng thái đơn hàng (như phút 12:15 trong video)
-  const handleAdminUpdateOrderStatus = (orderId, nextStatus) => {
-    const targetOrder = orders.find((o) => o.id === orderId);
+  // ĐIỀU KIỆN 3: Máy trạng thái đơn hàng (State Machine) — chỉ cho phép các bước chuyển hợp lệ
+  const handleAdminUpdateOrderStatus = async (orderId, nextStatus) => {
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/orders/transition/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_code: orderId, next_status: nextStatus })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showNotice(`⛔ Máy trạng thái chặn: ${data.error}`, 'warning');
+        return;
+      }
+      await syncStockFromBackend();
+      showNotice(`✅ ${data.message}`);
+      return;
+    } catch {
+      // Fallback local
+    }
+
     setOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, status: nextStatus } : o))
     );
-    if (nextStatus === 'Hoàn thành' && targetOrder && targetOrder.status !== 'Hoàn thành') {
-      const shopId = targetOrder.items[0]?.shopId || 'shop-1';
-      setShops((prev) =>
-        prev.map((s) =>
-          s.id === shopId
-            ? {
-                ...s,
-                walletBalance: s.walletBalance + targetOrder.totalAmount,
-                totalRevenue: s.totalRevenue + targetOrder.totalAmount
-              }
-            : s
-        )
-      );
-      showNotice(`Đơn #${orderId} đã Hoàn thành & cộng ${formatVND(targetOrder.totalAmount)} vào Ví người bán!`);
-    } else {
-      showNotice(`Đã chuyển trạng thái đơn #${orderId} sang "${nextStatus}"`);
-    }
+    showNotice(`Đã chuyển trạng thái đơn #${orderId} sang "${nextStatus}"`);
   };
 
   const currentBanner = banners[activeBannerIdx % banners.length] || banners[0];
@@ -2020,6 +2309,16 @@ export default function App() {
                               </span>
                               <span>⭐ {product.rating} ({product.sold} đã bán)</span>
                             </div>
+                            <div className="flex items-center justify-between text-[11px] pt-0.5">
+                              <span className="text-slate-400">Quy cách: {product.variants?.[0]?.label}</span>
+                              <span className={`px-2 py-0.5 rounded-full font-bold ${
+                                (product.variants?.[0]?.stock ?? product.stock) > 0
+                                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                  : 'bg-rose-100 text-rose-700'
+                              }`}>
+                                Kho DB: {product.variants?.[0]?.stock ?? product.stock}
+                              </span>
+                            </div>
                             <h4 className="font-bold text-sm line-clamp-2 min-h-[40px]">
                               {product.name}
                             </h4>
@@ -2398,6 +2697,24 @@ export default function App() {
         {/* 3. GIỎ HÀNG & THANH TOÁN (GHN API + VOUCHER + VNPAY/MOMO/VÍ)      */}
         {/* ----------------------------------------------------------------- */}
         {activeView === 'cart' && (
+          <div className="space-y-6">
+            {/* Thông báo khi đơn hàng bị chặn & Rollback do vượt quá tồn kho */}
+            {stockCheckResult && stockCheckResult.type === 'rollback' && (
+              <div className="p-4 rounded-2xl border border-rose-300 bg-rose-50 dark:bg-rose-950/60 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 font-semibold">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{stockCheckResult.errorDetail}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setStockCheckResult(null)}
+                  className="text-xs underline shrink-0"
+                >
+                  Đóng
+                </button>
+              </div>
+            )}
+
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7 space-y-4">
               <h2 className="text-xl font-extrabold flex items-center gap-2">
@@ -2432,44 +2749,78 @@ export default function App() {
                         <p className="text-xs text-slate-500">
                           Quy cách: {item.variant.label} ({item.variant.ripeness}) • {item.lineWeightGram}g
                         </p>
-                        <div className="text-sm font-extrabold text-emerald-600 mt-1">
-                          {formatVND(item.unitPrice)}
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          <span className="text-sm font-extrabold text-emerald-600">
+                            {formatVND(item.unitPrice)}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${
+                              item.quantity > item.variant.stock
+                                ? 'bg-rose-100 text-rose-700 border border-rose-300'
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            Kho còn: {item.variant.stock}
+                          </span>
+                          {item.quantity > item.variant.stock && (
+                            <span className="text-[11px] font-bold text-rose-600">
+                              ⚠️ Vượt quá tồn kho ({item.quantity} &gt; {item.variant.stock})!
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCart((prev) =>
-                              prev
-                                .map((c) =>
+                      <div className="flex flex-col items-end gap-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCart((prev) =>
+                                prev
+                                  .map((c) =>
+                                    c.productId === item.productId && c.variantId === item.variantId
+                                      ? { ...c, quantity: c.quantity - 1 }
+                                      : c
+                                  )
+                                  .filter((c) => c.quantity > 0)
+                              )
+                            }
+                            className="p-1.5 rounded-lg border hover:bg-slate-100 dark:hover:bg-slate-800"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                              setCart((prev) =>
+                                prev.map((c) =>
                                   c.productId === item.productId && c.variantId === item.variantId
-                                    ? { ...c, quantity: c.quantity - 1 }
+                                    ? { ...c, quantity: val }
                                     : c
                                 )
-                                .filter((c) => c.quantity > 0)
-                            )
-                          }
-                          className="p-1.5 rounded-lg border"
-                        >
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        <span className="text-sm font-bold w-6 text-center">{item.quantity}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCart((prev) =>
-                              prev.map((c) =>
-                                c.productId === item.productId && c.variantId === item.variantId
-                                  ? { ...c, quantity: c.quantity + 1 }
-                                  : c
+                              );
+                            }}
+                            className="w-14 text-center text-xs font-bold py-1 rounded-lg border bg-transparent"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCart((prev) =>
+                                prev.map((c) =>
+                                  c.productId === item.productId && c.variantId === item.variantId
+                                    ? { ...c, quantity: c.quantity + 1 }
+                                    : c
+                                )
                               )
-                            )
-                          }
-                          className="p-1.5 rounded-lg border"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                        </button>
+                            }
+                            className="p-1.5 rounded-lg border hover:bg-slate-100 dark:hover:bg-slate-800"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
                       </div>
                     </div>
                   ))}
@@ -2522,16 +2873,27 @@ export default function App() {
             {/* Cột Voucher & Thanh toán */}
             <div className="lg:col-span-5 space-y-4">
               <div className={`p-5 rounded-3xl border space-y-4 ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-100 shadow-sm'}`}>
-                <h3 className="font-bold text-sm flex items-center gap-2">
-                  <Ticket className="w-4 h-4 text-emerald-600" /> Chọn Mã Giảm Giá (Tối đa 1 Voucher tối ưu nhất)
-                </h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm flex items-center gap-2">
+                    <Ticket className="w-4 h-4 text-emerald-600" /> Ưu Đãi Đơn Hàng (Tối đa 1 Mã Giảm Giá + 1 Mã Vận Chuyển)
+                  </h3>
+                </div>
+
+                {voucherWarning && (
+                  <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/60 border border-amber-300 text-amber-800 dark:text-amber-200 text-[11px] flex items-center justify-between gap-2">
+                    <span>⚠️ {voucherWarning}</span>
+                    <button type="button" onClick={() => setVoucherWarning(null)} className="underline shrink-0">Đóng</button>
+                  </div>
+                )}
+
                 <div className="space-y-2">
-                  {vouchers.map((vc) => (
+                  <div className="text-[11px] font-bold text-slate-500 uppercase">1. Mã giảm giá trái cây (Chọn tối đa 1):</div>
+                  {vouchers.filter((vc) => vc.code !== 'FREESHIPGHN').map((vc) => (
                     <button
                       key={vc.id}
                       type="button"
-                      onClick={() => setSelectedVoucherCode(vc.code)}
-                      className={`w-full p-3 rounded-xl border text-left transition flex items-center justify-between ${
+                      onClick={() => setSelectedVoucherCode(selectedVoucherCode === vc.code ? '' : vc.code)}
+                      className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
                         selectedVoucherCode === vc.code
                           ? 'border-emerald-600 bg-emerald-500/10'
                           : 'border-slate-200 dark:border-slate-700'
@@ -2539,10 +2901,32 @@ export default function App() {
                     >
                       <div>
                         <div className="font-bold text-xs text-emerald-600">{vc.code} — {vc.title}</div>
-                        <div className="text-[11px] text-slate-500">{vc.description}</div>
+                        <div className="text-[11px] text-slate-500">{vc.description} (Đơn từ {formatVND(vc.minOrder)})</div>
                       </div>
-                      <span className="text-xs font-bold">
+                      <span className="text-xs font-bold shrink-0">
                         {selectedVoucherCode === vc.code ? '✓ Đang dùng' : 'Áp dụng'}
+                      </span>
+                    </button>
+                  ))}
+
+                  <div className="text-[11px] font-bold text-slate-500 uppercase pt-1">2. Mã hỗ trợ vận chuyển (Chọn tối đa 1):</div>
+                  {vouchers.filter((vc) => vc.code === 'FREESHIPGHN').map((vc) => (
+                    <button
+                      key={vc.id}
+                      type="button"
+                      onClick={() => setSelectedShippingVoucherCode(selectedShippingVoucherCode === vc.code ? '' : vc.code)}
+                      className={`w-full p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+                        selectedShippingVoucherCode === vc.code
+                          ? 'border-teal-600 bg-teal-500/10'
+                          : 'border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <div>
+                        <div className="font-bold text-xs text-teal-600">{vc.code} — {vc.title}</div>
+                        <div className="text-[11px] text-slate-500">{vc.description} (Đơn từ {formatVND(vc.minOrder)})</div>
+                      </div>
+                      <span className="text-xs font-bold shrink-0">
+                        {selectedShippingVoucherCode === vc.code ? '✓ Đang dùng' : 'Áp dụng'}
                       </span>
                     </button>
                   ))}
@@ -2586,11 +2970,19 @@ export default function App() {
                     <span className="font-semibold">{formatVND(cartSummary.shippingFee)}</span>
                   </div>
                   <div className="flex justify-between text-emerald-600">
-                    <span>Giảm giá Voucher ({selectedVoucherCode}):</span>
+                    <span>Mã giảm giá hàng ({selectedVoucherCode || 'Không dùng'}):</span>
                     <span className="font-bold">-{formatVND(cartSummary.discountAmount)}</span>
                   </div>
+                  <div className="flex justify-between text-teal-600">
+                    <span>Mã giảm phí vận chuyển ({selectedShippingVoucherCode || 'Không dùng'}):</span>
+                    <span className="font-bold">-{formatVND(cartSummary.shippingDiscountAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-slate-400 pt-1">
+                    <span>RequestKey (Chống trùng đơn):</span>
+                    <span className="font-mono font-semibold text-slate-500">{cartRequestKey}</span>
+                  </div>
                   <div className="flex justify-between text-base font-extrabold pt-2 border-t">
-                    <span>Tổng thanh toán:</span>
+                    <span>Tổng thanh toán (Server tính):</span>
                     <span className="text-rose-600">{formatVND(cartSummary.finalTotal)}</span>
                   </div>
                 </div>
@@ -2605,6 +2997,7 @@ export default function App() {
               </div>
             </div>
           </div>
+          </div>
         )}
 
         {/* ----------------------------------------------------------------- */}
@@ -2613,12 +3006,21 @@ export default function App() {
         {activeView === 'orders' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-xl font-extrabold flex items-center gap-2">
-                <Package className="w-6 h-6 text-emerald-600" /> Đơn Hàng Của Bạn ({orders.length})
-              </h2>
-              <span className="text-xs text-slate-500">
-                Mẹo demo bảo vệ đồ án: Bạn có thể Hủy đơn hoặc Yêu cầu trả hàng để thấy tiền tự động hoàn vào Ví!
-              </span>
+              <div>
+                <h2 className="text-xl font-extrabold flex items-center gap-2">
+                  <Package className="w-6 h-6 text-emerald-600" /> Đơn Hàng Của Bạn ({orders.length})
+                </h2>
+                <span className="text-xs text-slate-500">
+                  Đơn thanh toán Online bỏ dở sẽ giữ chỗ 30 phút (trừ kho, Voucher ở trạng thái Reserved). Hủy hoặc quá 30 phút sẽ tự động cộng lại kho & nhả Voucher về Released!
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSweepExpiredOrders}
+                className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold shadow flex items-center gap-1.5"
+              >
+                <Clock className="w-4 h-4" /> Quét & Thu Hồi Đơn Giữ Chỗ Quá Hạn 30 Phút
+              </button>
             </div>
 
             {orders.map((order) => (
@@ -2629,12 +3031,28 @@ export default function App() {
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
-                  <div className="text-xs space-x-2">
+                  <div className="text-xs flex flex-wrap items-center gap-2">
                     <span className="font-extrabold text-sm">#{order.id}</span>
                     <span className="text-slate-400">• {order.createdAt}</span>
                     <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-medium">
                       {order.paymentMethod}
                     </span>
+                    {order.requestKey && (
+                      <span className="px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-300 font-mono text-[10px]">
+                        Key: {order.requestKey}
+                      </span>
+                    )}
+                    {order.voucherStatus && order.voucherStatus !== 'None' && (
+                      <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                        order.voucherStatus === 'Reserved'
+                          ? 'bg-amber-100 text-amber-800'
+                          : order.voucherStatus === 'Released'
+                          ? 'bg-rose-100 text-rose-700'
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        Voucher: {order.voucherStatus}
+                      </span>
+                    )}
                   </div>
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-600">
                     Trạng thái: {order.status}
@@ -3678,8 +4096,14 @@ export default function App() {
                   Thanh Toán Đơn Trái Cây ({formatVND(cartSummary.finalTotal)})
                 </h3>
               </div>
-              <button type="button" onClick={() => setShowVnpayModal(false)}>
-                <X className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={handleAbandonVnpayModal}
+                className="px-2.5 py-1 rounded-lg bg-rose-100 text-rose-700 text-xs font-bold flex items-center gap-1"
+                title="Đóng cổng thanh toán (Bỏ dở đơn giữ chỗ)"
+              >
+                <span>Bỏ dở / Đóng</span>
+                <X className="w-4 h-4" />
               </button>
             </div>
 
