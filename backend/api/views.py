@@ -680,3 +680,23 @@ def set_variant_stock(request):
     new_stock = int(request.data.get('stock', 30))
     ProductVariant.objects.filter(id=variant_id).update(stock=new_stock)
     return Response({'message': f'Đã cập nhật tồn kho variant #{variant_id} = {new_stock}'})
+
+@api_view(['POST'])
+def login_api(request):
+    email = (request.data.get('email') or '').strip().lower()
+    password = (request.data.get('password') or '').strip()
+
+    accounts = {
+        'khachhang@gmail.com': {'id': 1, 'name': 'Khách Hàng Demo', 'role_code': 'buyer', 'role_label': 'Khách hàng', 'status': 'active'},
+        'seller@freshmart.vn': {'id': 2, 'name': 'Nông Trại Xanh Đà Lạt', 'role_code': 'seller', 'role_label': 'Nhà vườn', 'status': 'active'},
+        'admin@freshmart.vn': {'id': 3, 'name': 'Quản Trị Viên Hệ Thống', 'role_code': 'admin', 'role_label': 'Quản trị viên', 'status': 'active'},
+        'spam@gmail.com': {'id': 4, 'name': 'Tài Khoản Vi Phạm', 'role_code': 'buyer', 'role_label': 'Khách hàng', 'status': 'locked'},
+    }
+
+    acc = accounts.get(email)
+    if not acc or password not in ('123', '123456'):
+        return Response({'error': 'Email hoặc mật khẩu không chính xác! (Mật khẩu mặc định: 123)'}, status=status.HTTP_401_UNAUTHORIZED)
+    if acc['status'] == 'locked':
+        return Response({'error': 'Tài khoản này đã bị Quản trị viên khóa!'}, status=status.HTTP_403_FORBIDDEN)
+
+    return Response({**acc, 'email': email})

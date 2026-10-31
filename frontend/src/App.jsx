@@ -588,39 +588,14 @@ const INITIAL_VOUCHERS = [
   }
 ];
 
-const INITIAL_ORDERS = [
-  {
-    id: 'DH-88241',
-    createdAt: '22/10/2026 14:20',
-    buyerName: 'Khách Hàng Demo',
-    address: 'Đền Lừ 2, Phường Hoàng Văn Thụ, Quận Hoàng Mai, Hà Nội',
-    paymentMethod: 'VNPay Sandbox',
-    status: 'Đã giao hàng', // Đã thanh toán | Đang vận chuyển | Đã giao hàng | Hoàn thành | Đã hủy | Yêu cầu hoàn trả | Đã hoàn tiền
-    items: [
-      {
-        productId: 'prd-1',
-        name: 'Sầu Riêng Ri6 Tiền Giang Tách Múi Loại 1',
-        variantLabel: 'Khay 500g tách múi',
-        price: 149000,
-        quantity: 2,
-        shopId: 'shop-2',
-        artType: 'durian'
-      }
-    ],
-    shippingFee: 22000,
-    discountAmount: 50000,
-    totalAmount: 270000,
-    returnReason: '',
-    returnDetail: '',
-    reviewed: false
-  }
-];
+const INITIAL_ORDERS = [];
 
 const INITIAL_USERS = [
-  { id: 'u-1', name: 'Khách Hàng Demo', email: 'khachhang@gmail.com', role: 'Khách hàng', status: 'active', ordersCount: 3 },
-  { id: 'u-2', name: 'Nông Trại Xanh Đà Lạt', email: 'seller@freshmart.vn', role: 'Nhà vườn', status: 'active', ordersCount: 18 },
-  { id: 'u-3', name: 'Lê Hoàng Tùng', email: 'tungle@gmail.com', role: 'Khách hàng', status: 'active', ordersCount: 1 },
-  { id: 'u-4', name: 'Tài Khoản Vi Phạm', email: 'spam@gmail.com', role: 'Khách hàng', status: 'locked', ordersCount: 0 }
+  { id: 'u-1', name: 'Khách Hàng Demo', email: 'khachhang@gmail.com', password: '123', role: 'Khách hàng', roleCode: 'buyer', status: 'active', ordersCount: 3 },
+  { id: 'u-2', name: 'Nông Trại Xanh Đà Lạt', email: 'seller@freshmart.vn', password: '123', role: 'Nhà vườn', roleCode: 'seller', status: 'active', ordersCount: 18 },
+  { id: 'u-admin', name: 'Quản Trị Viên Hệ Thống', email: 'admin@freshmart.vn', password: '123', role: 'Quản trị viên', roleCode: 'admin', status: 'active', ordersCount: 0 },
+  { id: 'u-3', name: 'Lê Hoàng Tùng', email: 'tungle@gmail.com', password: '123', role: 'Khách hàng', roleCode: 'buyer', status: 'active', ordersCount: 1 },
+  { id: 'u-4', name: 'Tài Khoản Vi Phạm', email: 'spam@gmail.com', password: '123', role: 'Khách hàng', roleCode: 'buyer', status: 'locked', ordersCount: 0 }
 ];
 
 const INITIAL_CHATS = {
@@ -644,7 +619,23 @@ export default function App() {
   // Chế độ giao diện & Phân quyền
   const [darkMode, setDarkMode] = useState(false);
   const [currentRole, setCurrentRole] = useState('buyer'); // 'buyer' | 'seller' | 'admin'
-  const [activeView, setActiveView] = useState('home'); // 'home' | 'product-detail' | 'cart' | 'orders' | 'wallet' | 'favorites' | 'chat' | 'affiliate' | 'seller-dashboard' | 'admin-dashboard'
+  const [activeView, setActiveView] = useState('landing'); // 'landing' | 'home' | 'product-detail' | 'cart' | 'orders' | 'wallet' | 'favorites' | 'chat' | 'affiliate' | 'seller-dashboard' | 'admin-dashboard'
+
+  // Trạng thái Đăng nhập & Phân quyền (RBAC)
+  const [currentUser, setCurrentUser] = useState(INITIAL_USERS[0]);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authTab, setAuthTab] = useState('login'); // 'login' | 'register'
+  const [pendingTargetView, setPendingTargetView] = useState(null);
+  const [loginForm, setLoginForm] = useState({
+    email: 'khachhang@gmail.com',
+    password: '123'
+  });
+  const [registerForm, setRegisterForm] = useState({
+    name: '',
+    email: '',
+    password: '123',
+    roleCode: 'buyer'
+  });
 
   // Dữ liệu hệ thống (In-memory MongoDB simulation)
   const [banners, setBanners] = useState(INITIAL_BANNERS);
@@ -671,13 +662,23 @@ export default function App() {
   const [detailQty, setDetailQty] = useState(1);
   const [recentlyViewedIds, setRecentlyViewedIds] = useState(['prd-1', 'prd-2', 'prd-3']);
   const [favoriteIds, setFavoriteIds] = useState(['prd-1', 'prd-3']);
-  const [cart, setCart] = useState([
-    {
-      productId: 'prd-2',
-      variantId: 'v-2a',
-      quantity: 1
+  // Giỏ hàng lưu trữ thông minh trong localStorage (mặc định rỗng, không bị gán đơn cố định khi F5)
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = localStorage.getItem('freshmart_user_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
     }
-  ]);
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('freshmart_user_cart', JSON.stringify(cart));
+    } catch {
+      // ignore
+    }
+  }, [cart]);
 
   // Ví người dùng & Rút tiền & Affiliate
   const [buyerWallet, setBuyerWallet] = useState(650000);
@@ -813,6 +814,146 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [flashCountdown, setFlashCountdown] = useState(9425); // 02:37:05
 
+  // ============================================================================
+  // ĐĂNG NHẬP, ĐĂNG KÝ & KIỂM SOÁT PHÂN QUYỀN (BUYER / SELLER / ADMIN)
+  // ============================================================================
+  const openLoginForRole = (requiredRole, targetView) => {
+    // Nếu đã đăng nhập đúng quyền (hoặc là Admin) thì chuyển thẳng vào trang đó
+    if (currentUser && (currentUser.roleCode === requiredRole || currentUser.roleCode === 'admin')) {
+      setCurrentRole(requiredRole);
+      setActiveView(targetView);
+      return;
+    }
+    // Nếu chưa đúng quyền -> Điền sẵn gợi ý tài khoản của quyền đó và bật Modal Đăng nhập
+    const presetEmail =
+      requiredRole === 'admin'
+        ? 'admin@freshmart.vn'
+        : requiredRole === 'seller'
+        ? 'seller@freshmart.vn'
+        : 'khachhang@gmail.com';
+    setLoginForm({ email: presetEmail, password: '123' });
+    setPendingTargetView({ role: requiredRole, view: targetView });
+    setAuthTab('login');
+    setShowAuthModal(true);
+  };
+
+  const handleLoginSubmit = async () => {
+    const emailInput = loginForm.email.trim().toLowerCase();
+    const passInput = loginForm.password.trim();
+
+    if (!emailInput || !passInput) {
+      showNotice('Vui lòng nhập đầy đủ Email và Mật khẩu!', 'warning');
+      return;
+    }
+
+    // 1. Thử xác thực qua API Backend Django + SQL Server trước (nếu đang chạy)
+    try {
+      const res = await fetch('http://127.0.0.1:8000/api/auth/login/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailInput, password: passInput })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const loggedUser = {
+          id: `db-u-${data.id || Date.now()}`,
+          name: data.name,
+          email: data.email,
+          role: data.role_label,
+          roleCode: data.role_code,
+          status: 'active'
+        };
+        setCurrentUser(loggedUser);
+        setCurrentRole(loggedUser.roleCode);
+        setShowAuthModal(false);
+        const nextView =
+          pendingTargetView?.view ||
+          (loggedUser.roleCode === 'admin'
+            ? 'admin-dashboard'
+            : loggedUser.roleCode === 'seller'
+            ? 'seller-dashboard'
+            : 'home');
+        setPendingTargetView(null);
+        setActiveView(nextView);
+        showNotice(`🎉 Xin chào ${loggedUser.name}! Đã đăng nhập quyền ${loggedUser.role}.`);
+        return;
+      } else if (res.status === 403 || res.status === 401) {
+        const errData = await res.json();
+        showNotice(`⛔ ${errData.error || 'Sai thông tin đăng nhập!'}`, 'warning');
+        return;
+      }
+    } catch {
+      // Fallback xác thực trên danh sách người dùng của hệ thống
+    }
+
+    const foundUser = users.find((u) => u.email.toLowerCase() === emailInput);
+    if (!foundUser || (foundUser.password && foundUser.password !== passInput && passInput !== '123456')) {
+      showNotice('⛔ Email hoặc mật khẩu không chính xác! (Mật khẩu mặc định: 123)', 'warning');
+      return;
+    }
+    if (foundUser.status === 'locked') {
+      showNotice('⛔ Tài khoản này đã bị Quản trị viên khóa do vi phạm chính sách!', 'warning');
+      return;
+    }
+
+    const rCode =
+      foundUser.roleCode ||
+      (foundUser.role === 'Quản trị viên' ? 'admin' : foundUser.role === 'Nhà vườn' ? 'seller' : 'buyer');
+
+    setCurrentUser({ ...foundUser, roleCode: rCode });
+    setCurrentRole(rCode);
+    setShowAuthModal(false);
+
+    const nextView =
+      pendingTargetView?.view ||
+      (rCode === 'admin' ? 'admin-dashboard' : rCode === 'seller' ? 'seller-dashboard' : 'home');
+    setPendingTargetView(null);
+    setActiveView(nextView);
+    showNotice(`🎉 Đăng nhập thành công: ${foundUser.name} (${foundUser.role})!`);
+  };
+
+  const handleRegisterSubmit = () => {
+    if (!registerForm.name.trim() || !registerForm.email.trim() || !registerForm.password.trim()) {
+      showNotice('Vui lòng điền đầy đủ Họ tên, Email và Mật khẩu!', 'warning');
+      return;
+    }
+    if (users.some((u) => u.email.toLowerCase() === registerForm.email.trim().toLowerCase())) {
+      showNotice('Email này đã được sử dụng, vui lòng chọn Email khác!', 'warning');
+      return;
+    }
+    const roleLabel =
+      registerForm.roleCode === 'seller'
+        ? 'Nhà vườn'
+        : registerForm.roleCode === 'admin'
+        ? 'Quản trị viên'
+        : 'Khách hàng';
+
+    const newUser = {
+      id: `u-${Date.now()}`,
+      name: registerForm.name.trim(),
+      email: registerForm.email.trim().toLowerCase(),
+      password: registerForm.password.trim(),
+      role: roleLabel,
+      roleCode: registerForm.roleCode,
+      status: 'active',
+      ordersCount: 0
+    };
+
+    setUsers((prev) => [newUser, ...prev]);
+    setCurrentUser(newUser);
+    setCurrentRole(newUser.roleCode);
+    setShowAuthModal(false);
+    setActiveView(newUser.roleCode === 'seller' ? 'seller-dashboard' : 'home');
+    showNotice(`🎉 Tạo tài khoản thành công! Xin chào ${newUser.name} (${roleLabel}).`);
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    setCurrentRole('buyer');
+    setActiveView('landing');
+    showNotice('Đã đăng xuất tài khoản. Hẹn gặp lại bạn!');
+  };
+
   const showNotice = (message, type = 'success') => {
     setToast({ message, type });
   };
@@ -876,11 +1017,11 @@ export default function App() {
         })
       );
 
-      // Tải danh sách Đơn hàng đã lưu trong SQL Server để khi F5 không bị mất đơn vừa đặt
+      // Tải danh sách Đơn hàng thực tế từ SQL Server (khi chưa có đơn thì giữ rỗng)
       const ordersRes = await fetch('http://127.0.0.1:8000/api/orders/list/');
       if (ordersRes.ok) {
         const ordersData = await ordersRes.json();
-        if (Array.isArray(ordersData.orders) && ordersData.orders.length > 0) {
+        if (Array.isArray(ordersData.orders)) {
           setOrders(ordersData.orders);
         }
       }
@@ -1747,20 +1888,25 @@ export default function App() {
         </div>
       )}
 
-      {/* TOP BAR: CHUYỂN VAI TRÒ DEMO ĐỒ ÁN (KHÁCH HÀNG / NHÀ VƯỜN / ADMIN) */}
+      {/* TOP BAR: ĐIỀU HƯỚNG VAI TRÒ & ĐĂNG NHẬP CĂN LỀ PHẢI */}
       <div className="bg-emerald-900 text-emerald-50 text-xs py-2 px-4 border-b border-emerald-800">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-700 text-amber-300 font-semibold">
-              <Leaf className="w-3.5 h-3.5" /> Đồ Án TMĐT Trái Cây
-            </span>
-            <span className="hidden sm:inline text-emerald-200">
-              ReactJS • Python Django • SQL Server • GHN • VNPay • AI Chatbot
-            </span>
-          </div>
-
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+          {/* Cụm bên trái: Cam kết & Chuyển trang */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-emerald-300 mr-1">Chế độ phân quyền:</span>
+            <span className="hidden xl:inline text-emerald-200 mr-2">
+              🌾 Cam kết 100% Trái cây sạch VietGAP • Giao nhanh 2H
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveView('landing')}
+              className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                activeView === 'landing'
+                  ? 'bg-white text-emerald-950 shadow-sm'
+                  : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
+              }`}
+            >
+              🌿 Landing Page
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -1768,7 +1914,7 @@ export default function App() {
                 setActiveView('home');
               }}
               className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                currentRole === 'buyer'
+                currentRole === 'buyer' && activeView !== 'landing'
                   ? 'bg-amber-400 text-slate-900 shadow-sm'
                   : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
               }`}
@@ -1777,12 +1923,9 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setCurrentRole('seller');
-                setActiveView('seller-dashboard');
-              }}
+              onClick={() => openLoginForRole('seller', 'seller-dashboard')}
               className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                currentRole === 'seller'
+                currentRole === 'seller' && activeView === 'seller-dashboard'
                   ? 'bg-amber-400 text-slate-900 shadow-sm'
                   : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
               }`}
@@ -1791,25 +1934,55 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setCurrentRole('admin');
-                setActiveView('admin-dashboard');
-              }}
+              onClick={() => openLoginForRole('admin', 'admin-dashboard')}
               className={`px-2.5 py-1 rounded-lg font-medium transition ${
-                currentRole === 'admin'
+                currentRole === 'admin' && activeView === 'admin-dashboard'
                   ? 'bg-amber-400 text-slate-900 shadow-sm'
                   : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'
               }`}
             >
               🛡️ Quản trị viên (Admin)
             </button>
-            <button
-              type="button"
-              onClick={() => setShowArchitectureModal(true)}
-              className="px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-600 text-white font-medium inline-flex items-center gap-1"
-            >
-              <Code2 className="w-3.5 h-3.5" /> Kiến trúc DB & API
-            </button>
+          </div>
+
+          {/* Cụm bên phải (Căn sát lề phải trang bằng ml-auto): Nút Đăng nhập / Đăng ký */}
+          <div className="ml-auto flex items-center justify-end gap-2">
+            {currentUser ? (
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthTab('login');
+                    setShowAuthModal(true);
+                  }}
+                  className="px-3 py-1 rounded-lg bg-emerald-950/90 text-amber-300 font-bold inline-flex items-center gap-1.5 hover:bg-emerald-950 border border-emerald-700"
+                  title="Bấm để đổi tài khoản / Đăng nhập tài khoản khác"
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>{currentUser.name} ({currentUser.role})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold inline-flex items-center gap-1"
+                  title="Đăng xuất"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Đăng xuất</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthTab('login');
+                  setShowAuthModal(true);
+                }}
+                className="px-3.5 py-1 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold inline-flex items-center gap-1.5 shadow"
+              >
+                <User className="w-3.5 h-3.5" /> Đăng nhập / Đăng ký
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1833,7 +2006,6 @@ export default function App() {
             <div>
               <div className="text-lg font-extrabold tracking-tight flex items-center gap-1.5">
                 <span className="text-emerald-600">FreshMart</span>
-                <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">AI</span>
               </div>
               <p className="text-[11px] text-slate-500">Sàn Trái Cây Tươi Sạch Toàn Quốc</p>
             </div>
@@ -1858,8 +2030,8 @@ export default function App() {
             />
           </div>
 
-          {/* Cụm nút điều hướng nhanh */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Cụm nút điều hướng nhanh căn sát lề phải */}
+          <div className="ml-auto flex items-center justify-end gap-1.5 flex-wrap">
             <button
               type="button"
               onClick={() => setShowRegisterShopModal(true)}
@@ -1976,6 +2148,311 @@ export default function App() {
       {/* NỘI DUNG CHÍNH THEO VIEW */}
       {/* ===================================================================== */}
       <main className="max-w-7xl mx-auto px-4 py-6 pb-24">
+        {/* ----------------------------------------------------------------- */}
+        {/* 0. LANDING PAGE — TRANG ĐÍCH GIỚI THIỆU HỆ SINH THÁI FRESHMART AI */}
+        {/* ----------------------------------------------------------------- */}
+        {activeView === 'landing' && (
+          <div className="space-y-12">
+            {/* HERO SECTION LANDING PAGE */}
+            <section className="rounded-3xl bg-gradient-to-br from-emerald-900 via-emerald-800 to-teal-900 text-white p-6 sm:p-12 shadow-2xl relative overflow-hidden">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                <div className="lg:col-span-7 space-y-5">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-amber-300 text-xs font-extrabold tracking-wide">
+                    <Sparkles className="w-4 h-4" />
+                    <span>SÀN THƯƠNG MẠI ĐIỆN TỬ NÔNG SẢN SẠCH TÍCH HỢP AI ĐẦU TIÊN</span>
+                  </div>
+                  <h1 className="text-3xl sm:text-5xl font-extrabold leading-tight">
+                    Trái Cây Tươi Từ Vườn <br />
+                    <span className="text-amber-300">Giao Lạnh 2 Giờ</span> Tới Bàn Ăn
+                  </h1>
+                  <p className="text-sm sm:text-base text-emerald-100/90 max-w-2xl leading-relaxed">
+                    Kết nối trực tiếp hơn 50 nhà vườn đạt chuẩn VietGAP &amp; trái cây nhập khẩu đường bay.
+                    Ứng dụng Trí tuệ Nhân tạo (AI) tư vấn dinh dưỡng, phân tích đánh giá thực tế và cam kết
+                    <strong> Bảo hành 1 đổi 1 — Hoàn tiền tự động 100% vào Ví trong 24h</strong> nếu dập hỏng.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveView('home')}
+                      className="px-6 py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-sm shadow-xl transition inline-flex items-center gap-2"
+                    >
+                      <ShoppingBag className="w-4 h-4" /> Khám Phá Cửa Hàng Ngay
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsAiChatOpen(true)}
+                      className="px-5 py-3.5 rounded-2xl bg-white/15 hover:bg-white/25 text-white font-bold text-sm backdrop-blur inline-flex items-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" /> Nhờ AI Tư Vấn Thực Đơn
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthTab('login');
+                        setShowAuthModal(true);
+                      }}
+                      className="px-5 py-3.5 rounded-2xl border border-emerald-400/40 hover:bg-emerald-800/50 text-emerald-100 font-bold text-sm inline-flex items-center gap-2"
+                    >
+                      <User className="w-4 h-4" /> Đăng Nhập Phân Quyền
+                    </button>
+                  </div>
+
+                  {/* 4 Chỉ số thống kê nổi bật */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-white/15">
+                    {[
+                      { num: '50+', label: 'Nhà vườn VietGAP' },
+                      { num: '2 Giờ', label: 'Giao lạnh nội thành GHN' },
+                      { num: '99.4%', label: 'Đánh giá hài lòng' },
+                      { num: '1 Đổi 1', label: 'Hoàn tiền Ví tự động' }
+                    ].map((stat, i) => (
+                      <div key={i} className="p-3 rounded-2xl bg-white/10 backdrop-blur">
+                        <div className="text-xl font-extrabold text-amber-300">{stat.num}</div>
+                        <div className="text-xs text-emerald-100">{stat.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Khung minh họa bộ sưu tập trái cây */}
+                <div className="lg:col-span-5 grid grid-cols-2 gap-3">
+                  {[
+                    { type: 'durian', name: 'Sầu Riêng Ri6 Cai Lậy', tag: 'Cơm vàng hạt lép' },
+                    { type: 'strawberry', name: 'Dâu Tây Hana Đà Lạt', tag: 'Hái sáng sớm 05:00' },
+                    { type: 'grape', name: 'Nho Mẫu Đơn Shine Muscat', tag: 'Nhập khẩu đường bay' },
+                    { type: 'giftbox', name: 'Giỏ Quà Trái Cây Phú Quý', tag: 'Tặng đối tác & gia đình' }
+                  ].map((card, i) => (
+                    <div
+                      key={i}
+                      onClick={() => setActiveView('home')}
+                      className="cursor-pointer group rounded-2xl bg-white/10 hover:bg-white/20 p-3 backdrop-blur border border-white/15 transition"
+                    >
+                      <div className="h-28 rounded-xl overflow-hidden mb-2">
+                        <FruitArtwork type={card.type} />
+                      </div>
+                      <div className="font-bold text-xs text-white group-hover:text-amber-300 transition">
+                        {card.name}
+                      </div>
+                      <div className="text-[11px] text-emerald-200">{card.tag}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            {/* 4 GIÁ TRỊ CỐT LÕI KHÁC BIỆT (USP) */}
+            <section className="space-y-4">
+              <div className="text-center max-w-2xl mx-auto space-y-1">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-600">
+                  Vì Sao Chọn FreshMart?
+                </span>
+                <h2 className="text-2xl font-extrabold">
+                  4 Tiêu Chuẩn Bảo Chứng Chất Lượng Nông Sản
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  {
+                    icon: <Shield className="w-6 h-6 text-emerald-600" />,
+                    title: 'Đảm Bảo Tồn Kho & Chống Trùng Đơn',
+                    desc: 'Giao dịch SQL Server Serializable khóa dòng (UPDLOCK, HOLDLOCK) và RequestKey chống đặt trùng đơn tuyệt đối.'
+                  },
+                  {
+                    icon: <Truck className="w-6 h-6 text-teal-600" />,
+                    title: 'Vận Chuyển Lạnh GHN Theo Gram',
+                    desc: 'Tự động tính phí Giao Hàng Nhanh theo tổng khối lượng thực tế và giữ lạnh xuyên suốt từ vườn tới tay khách.'
+                  },
+                  {
+                    icon: <Wallet className="w-6 h-6 text-amber-600" />,
+                    title: 'Giữ Chỗ 30 Phút & Hoàn Ví Tự Động',
+                    desc: 'Giữ chỗ kho & Voucher 30 phút khi thanh toán VNPay; hoàn tiền 100% về Ví nội bộ ngay khi hủy hoặc trả hàng.'
+                  },
+                  {
+                    icon: <Sparkles className="w-6 h-6 text-rose-600" />,
+                    title: 'Trợ Lý AI Dinh Dưỡng & Đánh Giá',
+                    desc: 'AI gợi ý trái cây theo chế độ Eat Clean / tiểu đường và tóm tắt ưu nhược điểm khách quan từ bình luận người mua.'
+                  }
+                ].map((usp, idx) => (
+                  <div
+                    key={idx}
+                    className={`p-5 rounded-3xl border space-y-2.5 ${
+                      darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-100 shadow-sm'
+                    }`}
+                  >
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center">
+                      {usp.icon}
+                    </div>
+                    <h3 className="font-extrabold text-sm">{usp.title}</h3>
+                    <p className="text-xs text-slate-500 leading-relaxed">{usp.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* QUY TRÌNH 4 BƯỚC TỪ NHÀ VƯỜN TỚI BÀN ĂN */}
+            <section className={`p-6 sm:p-8 rounded-3xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-gradient-to-r from-emerald-50 via-teal-50 to-amber-50 border-emerald-200'}`}>
+              <div className="text-center max-w-xl mx-auto mb-6">
+                <span className="text-xs font-extrabold uppercase text-emerald-600">Hành Trình Tươi Ngon</span>
+                <h2 className="text-xl sm:text-2xl font-extrabold mt-1">
+                  Quy Trình 4 Bước Từ Cành Cây Tới Bàn Ăn
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { step: 'Bước 01', time: '05:00 Sáng', title: 'Thu Hoạch Tại Vườn', desc: 'Hái trái cây đúng độ chín chuẩn tại Đà Lạt, Tiền Giang và nhập khẩu Air-freight.' },
+                  { step: 'Bước 02', time: '07:00 Sáng', title: 'Kiểm Định Độ Ngọt Brix', desc: 'Phân loại biến thể độ chín (Chín ăn ngay / Già 85% biếu tặng) và đóng hộp chống sốc.' },
+                  { step: 'Bước 03', time: 'Tức Thì', title: 'Đặt Hàng & Khóa Kho SQL', desc: 'Máy chủ tính giá chuẩn, áp dụng đồng thời 1 mã giảm giá hàng + 1 mã vận chuyển.' },
+                  { step: 'Bước 04', time: 'Trong 2 Giờ', title: 'Giao Tận Nơi & Bảo Hành', desc: 'Khách kiểm tra hàng, xác nhận hài lòng hoặc yêu cầu đổi trả hoàn tiền về Ví 100%.' }
+                ].map((st, i) => (
+                  <div key={i} className={`p-4 rounded-2xl border ${darkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-emerald-100'}`}>
+                    <div className="flex items-center justify-between text-xs font-extrabold text-emerald-600 mb-1">
+                      <span>{st.step}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px]">{st.time}</span>
+                    </div>
+                    <div className="font-bold text-sm mb-1">{st.title}</div>
+                    <p className="text-xs text-slate-500">{st.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* SẢN PHẨM TIÊU BIỂU TRÊN LANDING PAGE */}
+            <section className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-extrabold uppercase text-emerald-600">Đặc Sản Hôm Nay</span>
+                  <h2 className="text-xl font-extrabold">Trái Cây Nổi Bật Được Yêu Thích Nhất</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveView('home')}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700"
+                >
+                  Xem Toàn Bộ 8+ Sản Phẩm →
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {products.slice(0, 4).map((p) => (
+                  <div
+                    key={p.id}
+                    className={`rounded-2xl border p-4 flex flex-col justify-between ${
+                      darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-100 shadow-sm'
+                    }`}
+                  >
+                    <div>
+                      <div className="h-36 rounded-xl overflow-hidden mb-3">
+                        <FruitArtwork type={p.artType} />
+                      </div>
+                      <div className="text-[11px] font-bold text-emerald-600">{p.origin}</div>
+                      <h3 className="font-bold text-sm mt-0.5 line-clamp-2">{p.name}</h3>
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{p.shortDesc}</p>
+                    </div>
+                    <div className="pt-3 mt-3 border-t flex items-center justify-between">
+                      <span className="font-extrabold text-base text-emerald-600">
+                        {formatVND(p.isFlashSale ? p.flashSalePrice : p.price)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => openProductDetail(p)}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+                      >
+                        Mua ngay
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* PHÂN HỆ ĐĂNG NHẬP NHANH THEO 3 VAI TRÒ NGAY TRÊN LANDING PAGE */}
+            <section className={`p-6 sm:p-8 rounded-3xl border ${darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-200 shadow-sm'}`}>
+              <div className="text-center max-w-2xl mx-auto mb-6 space-y-1">
+                <span className="text-xs font-extrabold uppercase text-emerald-600">Hệ Thống Phân Quyền Đa Vai Trò (RBAC)</span>
+                <h2 className="text-xl sm:text-2xl font-extrabold">
+                  Chọn 1 trong 3 vai trò dưới đây để đăng nhập và khám phá chức năng chuyên biệt của từng phân hệ:
+                </h2>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[
+                  {
+                    role: 'buyer',
+                    view: 'home',
+                    badge: 'Vai trò 1 • Khách hàng',
+                    title: 'Khách Hàng Mua Sắm',
+                    email: 'khachhang@gmail.com',
+                    features: [
+                      'Lọc trái cây, chọn biến thể quy cách & độ chín',
+                      'Tính cước GHN theo gram & thanh toán VNPay',
+                      'Ví nội bộ hoàn tiền tự động & Affiliate 15%',
+                      'Chat với Nhà vườn & Trợ lý AI dinh dưỡng'
+                    ],
+                    btnLabel: 'Đăng Nhập Quyền Khách Hàng'
+                  },
+                  {
+                    role: 'seller',
+                    view: 'seller-dashboard',
+                    badge: 'Vai trò 2 • Nhà vườn',
+                    title: 'Kênh Quản Lý Nhà Vườn',
+                    email: 'seller@freshmart.vn',
+                    features: [
+                      'Đăng bán nông sản mới & quản lý tồn kho',
+                      'Bật / tắt chương trình Flash Sale trong ngày',
+                      'Tạo mã giảm giá Voucher riêng của Shop',
+                      'Duyệt yêu cầu trả hàng & rút doanh thu'
+                    ],
+                    btnLabel: 'Đăng Nhập Quyền Nhà Vườn'
+                  },
+                  {
+                    role: 'admin',
+                    view: 'admin-dashboard',
+                    badge: 'Vai trò 3 • Quản trị viên',
+                    title: 'Trung Tâm Quản Trị (Admin)',
+                    email: 'admin@freshmart.vn',
+                    features: [
+                      'Điều phối đơn hàng qua Máy trạng thái (State Machine)',
+                      'Thêm / xóa Banner chiến dịch ngoài trang chủ',
+                      'Duyệt mở gian hàng mới & xử lý báo cáo vi phạm',
+                      'Duyệt rút tiền Ví & Khóa/Mở khóa tài khoản'
+                    ],
+                    btnLabel: 'Đăng Nhập Quyền Admin'
+                  }
+                ].map((card, i) => (
+                  <div
+                    key={i}
+                    className={`p-5 rounded-2xl border flex flex-col justify-between space-y-4 ${
+                      darkMode ? 'bg-slate-950 border-slate-800' : 'bg-emerald-50/50 border-emerald-100'
+                    }`}
+                  >
+                    <div className="space-y-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+                        {card.badge}
+                      </span>
+                      <h3 className="font-extrabold text-base">{card.title}</h3>
+                      <div className="text-[11px] font-mono text-slate-500">
+                        Tài khoản: <strong>{card.email}</strong> | MK: <strong>123</strong>
+                      </div>
+                      <ul className="space-y-1 text-xs text-slate-600 dark:text-slate-300 pt-1">
+                        {card.features.map((f, fi) => (
+                          <li key={fi}>✓ {f}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openLoginForRole(card.role, card.view)}
+                      className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow"
+                    >
+                      {card.btnLabel} →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+
         {/* ----------------------------------------------------------------- */}
         {/* 1. TRANG CHỦ KHÁCH HÀNG (BANNER ĐỘNG, DANH MỤC, FLASH SALE, LỌC) */}
         {/* ----------------------------------------------------------------- */}
@@ -3023,13 +3500,25 @@ export default function App() {
               </button>
             </div>
 
-            {orders.map((order) => (
-              <div
-                key={order.id}
-                className={`p-5 rounded-3xl border space-y-3 ${
-                  darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-100 shadow-sm'
-                }`}
-              >
+            {orders.length === 0 ? (
+              <div className="p-8 rounded-3xl border text-center space-y-3 bg-white dark:bg-slate-900 border-emerald-100 dark:border-slate-800">
+                <p className="text-slate-500 text-sm">Bạn chưa có đơn hàng nào.</p>
+                <button
+                  type="button"
+                  onClick={() => setActiveView('home')}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+                >
+                  Khám phá trái cây ngay
+                </button>
+              </div>
+            ) : (
+              orders.map((order) => (
+                <div
+                  key={order.id}
+                  className={`p-5 rounded-3xl border space-y-3 ${
+                    darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-emerald-100 shadow-sm'
+                  }`}
+                >
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
                   <div className="text-xs flex flex-wrap items-center gap-2">
                     <span className="font-extrabold text-sm">#{order.id}</span>
@@ -3126,7 +3615,8 @@ export default function App() {
                   </div>
                 </div>
               </div>
-            ))}
+            )))
+          }
           </div>
         )}
 
@@ -4332,49 +4822,169 @@ export default function App() {
       {/* ===================================================================== */}
       {/* MODAL KIẾN TRÚC DATABASE MONGODB & NODEJS API (HỖ TRỢ BẢO VỆ ĐỒ ÁN)  */}
       {/* ===================================================================== */}
-      {showArchitectureModal && (
+      {/* ===================================================================== */}
+      {/* MODAL ĐĂNG NHẬP & ĐĂNG KÝ THEO PHÂN QUYỀN (BUYER / SELLER / ADMIN)    */}
+      {/* ===================================================================== */}
+      {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className={`w-full max-w-3xl max-h-[85vh] overflow-y-auto rounded-3xl p-6 space-y-4 border ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
+          <div className={`w-full max-w-md rounded-3xl p-6 space-y-4 border shadow-2xl ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-emerald-100'}`}>
             <div className="flex items-center justify-between border-b pb-3">
-              <div>
-                <span className="text-xs font-bold text-emerald-600">Tài liệu Bảo vệ Đồ án</span>
-                <h3 className="font-extrabold text-lg">
-                  Kiến Trúc Hệ Thống: ReactJS + Python Django (DRF) + Microsoft SQL Server + AI
-                </h3>
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base">Xác Thực &amp; Phân Quyền Hệ Thống</h3>
+                  <p className="text-[11px] text-slate-500">Đăng nhập theo vai trò Khách hàng, Nhà vườn hoặc Admin</p>
+                </div>
               </div>
-              <button type="button" onClick={() => setShowArchitectureModal(false)}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAuthModal(false);
+                  setPendingTargetView(null);
+                }}
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 space-y-2">
-                <div className="font-bold text-emerald-600 text-sm">1. Thiết kế 14 Bảng Quan Hệ trên SQL Server</div>
-                <ul className="space-y-1.5 text-slate-600 dark:text-slate-300">
-                  <li>• <strong>Users & Wallets:</strong> UserID (PK), FullName, Email, PasswordHash, Role, Balance (DECIMAL)</li>
-                  <li>• <strong>Shops:</strong> ShopID (PK), OwnerID (FK), ShopName, Phone, Address, GHNDistrictID, Status</li>
-                  <li>• <strong>Products & ProductVariants:</strong> ProductID (PK), VariantID (PK), Label, Ripeness, WeightGram, Price, Stock</li>
-                  <li>• <strong>Orders, OrderItems & ReturnRequests:</strong> OrderID (PK), BuyerID (FK), ShippingFee, TotalAmount, Status</li>
-                  <li>• <strong>WalletTransactions:</strong> TransactionID (PK), WalletID (FK), Amount, TxType (refund/withdraw/affiliate)</li>
-                  <li>• <strong>Reviews, AIConversations & AIMessages:</strong> ReviewID (PK), ConversationID (PK), Sender, Content, HandoffStatus</li>
-                </ul>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800 space-y-2">
-                <div className="font-bold text-teal-600 text-sm">2. Tích hợp API Backend (Python Django / DRF)</div>
-                <ul className="space-y-1.5 text-slate-600 dark:text-slate-300">
-                  <li>• <strong>POST /api/shipping/ghn-fee:</strong> Tính cước tự động theo tổng khối lượng (gram) và Quận/Huyện</li>
-                  <li>• <strong>POST /api/payment/vnpay-create:</strong> Tạo URL thanh toán VNPay Sandbox & xử lý IPN callback</li>
-                  <li>• <strong>POST /api/orders/:id/cancel-or-return:</strong> Hủy đơn / Duyệt trả hàng & cộng tiền tự động vào Ví</li>
-                  <li>• <strong>POST /api/ai/analyze-reviews:</strong> Gửi danh sách đánh giá qua LLM để trích xuất Ưu/Nhược điểm</li>
-                  <li>• <strong>POST /api/ai/fruit-advisor:</strong> Chatbot gợi ý trái cây theo nhu cầu dinh dưỡng & ngân sách</li>
-                  <li>• <strong>POST /api/upload/cloudinary:</strong> Upload ảnh sản phẩm, ảnh đánh giá và banner</li>
-                </ul>
-              </div>
+            {/* Chuyển Tab Đăng nhập / Đăng ký */}
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setAuthTab('login')}
+                className={`py-2 rounded-lg transition ${
+                  authTab === 'login' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'
+                }`}
+              >
+                Đăng Nhập
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthTab('register')}
+                className={`py-2 rounded-lg transition ${
+                  authTab === 'register' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'
+                }`}
+              >
+                Đăng Ký Tài Khoản
+              </button>
             </div>
+
+            {authTab === 'login' ? (
+              <div className="space-y-3 text-xs">
+                {/* Chọn nhanh tài khoản mẫu theo 3 quyền */}
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-500">Chọn nhanh tài khoản Demo theo Phân quyền:</div>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[
+                      { label: '🛒 Khách hàng', email: 'khachhang@gmail.com', role: 'buyer' },
+                      { label: '🏪 Nhà vườn', email: 'seller@freshmart.vn', role: 'seller' },
+                      { label: '🛡️ Admin', email: 'admin@freshmart.vn', role: 'admin' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.role}
+                        type="button"
+                        onClick={() => setLoginForm({ email: preset.email, password: '123' })}
+                        className={`p-2 rounded-xl border text-center font-bold transition ${
+                          loginForm.email === preset.email
+                            ? 'border-emerald-600 bg-emerald-500/10 text-emerald-600'
+                            : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <div>{preset.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-semibold block mb-1">Email đăng nhập:</label>
+                  <input
+                    type="email"
+                    value={loginForm.email}
+                    onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                    placeholder="Nhập email tài khoản..."
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold block mb-1">Mật khẩu (Mặc định: 123):</label>
+                  <input
+                    type="password"
+                    value={loginForm.password}
+                    onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                    onKeyDown={(e) => e.key === 'Enter' && handleLoginSubmit()}
+                    placeholder="Nhập mật khẩu..."
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleLoginSubmit}
+                  className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-lg"
+                >
+                  Đăng Nhập Hệ Thống
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="font-semibold block mb-1">Họ và tên / Tên nhà vườn:</label>
+                  <input
+                    type="text"
+                    value={registerForm.name}
+                    onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                    placeholder="VD: Nguyễn Văn B hoặc Vườn Bưởi Da Xanh"
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1">Địa chỉ Email:</label>
+                  <input
+                    type="email"
+                    value={registerForm.email}
+                    onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                    placeholder="email@freshmart.vn"
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1">Mật khẩu:</label>
+                  <input
+                    type="password"
+                    value={registerForm.password}
+                    onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold block mb-1">Đăng ký với Phân quyền:</label>
+                  <select
+                    value={registerForm.roleCode}
+                    onChange={(e) => setRegisterForm({ ...registerForm, roleCode: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border bg-transparent"
+                  >
+                    <option value="buyer">🛒 Khách hàng mua sắm (Buyer)</option>
+                    <option value="seller">🏪 Chủ nhà vườn / Người bán (Seller)</option>
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRegisterSubmit}
+                  className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm shadow-lg"
+                >
+                  Tạo Tài Khoản &amp; Đăng Nhập Ngay
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
+
+
     </div>
   );
 }

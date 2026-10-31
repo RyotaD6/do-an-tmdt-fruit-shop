@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    ProductViewSet, CategoryViewSet, ai_fruit_advisor, seed_data,
+    ProductViewSet, CategoryViewSet, ai_fruit_advisor, login_api, seed_data,
     checkout_order, list_orders, confirm_online_payment,
     cancel_order_api, release_expired_orders_api, transition_order_state_api, set_variant_stock
 )
@@ -21,4 +21,5 @@ urlpatterns = [
     path('variants/set-stock/', set_variant_stock, name='set-variant-stock'),
     path('ai/advisor/', ai_fruit_advisor, name='ai-advisor'),
     path('seed-data/', seed_data, name='seed-data'),
+    path('auth/login/', login_api, name='auth-login')
 ]
