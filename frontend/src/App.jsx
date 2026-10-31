@@ -1893,9 +1893,6 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
           {/* Cụm bên trái: Cam kết & Chuyển trang */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="hidden xl:inline text-emerald-200 mr-2">
-              🌾 Cam kết 100% Trái cây sạch VietGAP • Giao nhanh 2H
-            </span>
             <button
               type="button"
               onClick={() => setActiveView('landing')}
